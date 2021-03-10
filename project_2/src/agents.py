@@ -9,7 +9,7 @@ import torch.optim as optim
 
 from collections import namedtuple, deque
 
-from .per import PrioritizedReplayBuffer
+from .replay_buffer import ReplayBuffer
 from .models import Actor, Critic
 
 
@@ -46,7 +46,7 @@ class DDPGAgent():
                  buffer_size, batch_size, gamma, tau,
                  lr_actor, lr_critic, weight_decay,
                  update_every, update_times,
-                 per_a=0.6, per_b=0.4, per_e=1e-3):
+                 eps_start=1.0, eps_end=0.01, eps_decay=1e-6):
         self.state_size = state_size
         self.action_size = action_size
         self.seed = random.seed(random_seed)
@@ -57,10 +57,10 @@ class DDPGAgent():
         self.update_every = update_every
         self.update_times = update_times
 
-        # Prioritized Experience Replay Params
-        self.per_a = per_a
-        self.per_b = per_b
-        self.per_e = per_e
+        # Epsilon Decay
+        self.eps = eps_start
+        self.eps_end = eps_end
+        self.eps_decay = eps_decay
 
         # initialize Actor Network
         self.actor_local = Actor(state_size, action_size, random_seed).to(device)
@@ -78,8 +78,7 @@ class DDPGAgent():
         )
 
         self.noise = OUNoise(action_size, random_seed)
-        self.memory = PrioritizedReplayBuffer(action_size, buffer_size, batch_size, random_seed, device)
-        # self.memory = ReplayBuffer(action_size, buffer_size, batch_size, random_seed)
+        self.memory = ReplayBuffer(action_size, buffer_size, batch_size, random_seed, device)
 
         self.step_count = 0
 
@@ -104,7 +103,7 @@ class DDPGAgent():
         self.actor_local.train()
 
         if add_noise:
-            action += self.noise.sample()
+            action += self.eps * self.noise.sample()
 
         return np.clip(action, -1, 1)
 
@@ -115,7 +114,7 @@ class DDPGAgent():
 
     def learn(self, experiences, gamma):
         # --- update critic ---
-        states, actions, rewards, next_states, dones, indices, probs = experiences
+        states, actions, rewards, next_states, dones = experiences
 
         actions_next = self.actor_target(next_states)
         Q_targets_next = self.critic_target(next_states, actions_next)
@@ -124,28 +123,11 @@ class DDPGAgent():
 
         critic_loss = F.mse_loss(Q_expected, Q_targets)
 
-
-        # TD delta for updating PER
-        td = torch.abs(Q_targets - Q_expected)
-
-        # importance sampling weight
-        if probs:
-            weights = np.array(probs).reshape(-1, 1) * len(self.memory) ** self.per_b
-            weights /= np.max(weights)
-        else:
-            weights = np.ones(critic_loss.shape, dtype=np.float)
-
-        weighted_loss = torch.mean(torch.from_numpy(weights).float().to(device) * critic_loss)
-
         self.critic_optimizer.zero_grad()
-        # critic_loss.backward()
-        weighted_loss.backward()
+        critic_loss.backward()
 
         nn.utils.clip_grad_norm_(self.critic_local.parameters(), 1)
         self.critic_optimizer.step()
-
-        if indices:
-            self.memory.update(indices, list(td.detach().to('cpu').numpy().squeeze() ** self.per_a + self.per_e))
 
         # --- update actor ---
         actions_pred = self.actor_local(states)
@@ -159,6 +141,8 @@ class DDPGAgent():
         self.soft_update(self.critic_local, self.critic_target, self.tau)
         self.soft_update(self.actor_local, self.actor_target, self.tau)
 
+        # update noise
+        self.eps = max(self.eps_end, self.eps - self.eps_decay)
 
     def soft_update(self, local_model, target_model, tau):
         target_params = target_model.parameters()

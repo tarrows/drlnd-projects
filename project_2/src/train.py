@@ -26,7 +26,7 @@ def save_data(agent, name, scores):
         f.write('\n'.join(score_csv))
 
 
-def train(env, agent, n_episodes=200, max_t=100):
+def train(env, agent, n_episodes=200, max_t=1000):
     # get the default brain
     brain_name = env.brain_names[0]
 
@@ -106,20 +106,16 @@ def train(env, agent, n_episodes=200, max_t=100):
                 save_data(agent, name, scores)
 
 
-        if len(scores) >= 100 and np.mean(scores_window) >= 30.0 and not once_solved:
+        if not once_solved and i_episode > 100 and np.mean(scores_window) >= 30.0:
             total_elapsed = time_episode_end - time_train_start
-            msg_solved = (
-                '\nEnvironment solved in {:d} episodes!'
-                '\tAverage Score: {:.2f}\tTotal Time: {}'
-            )
-
+            msg_solved = '\nEnvironment solved in {:d} episodes!\tAverage Score: {:.2f}\tTotal Time: {}'
             print(msg_solved.format(i_episode-100, np.mean(scores_window), total_elapsed))
 
             name = '{}_solved'.format(train_id)
             save_data(agent, name, scores)
             # torch.save(agent.actor_local.state_dict(), 'checkpoint_actor.pth')
             # torch.save(agent.critic_local.state_dict(), 'checkpoint_critic.pth')
+
             once_solved = True
-            # break
 
     return scores, elapses
